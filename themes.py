@@ -18,20 +18,25 @@ class Modern:
     # Constant symbols
     BODY = 'body'
     H1 = 'h1'
+    H2 = 'h2'
     P = 'p'
     TEXTBOX = 'textbox'
     INPUT = 'input'
+    ENTRY = 'entry'
     BUTTON = 'button'
+    BUTTON_LARGE = 'button-large'
 
     # Theme styling
     elements = {
         'body': 'TFrame',
         'h1': 'h1.TLabel',
+        'h2': 'h2.TLabel',
         'p': 'p.TLabel',
         'input': 'input.TLabel',
         'entry': 'entry.TFrame',
         'textbox': '',
         'button': 'TButton',
+        'button-large': 'button-large.TButton',
     }
 
     def __init__(self, root, style=None):
@@ -43,14 +48,15 @@ class Modern:
         return self.theme_name
 
     def get_style(self):
-        print(self.style)
         return self.style
 
     def __configure(self):
         self.style.theme_use(self.theme_name)
         self.style.configure('TFrame', background=self.bg_color, relief='flat')
 
-        self.style.configure('h1.TLabel', background=self.bg_color, foreground=self.fg_color, font=('Raleway', 24),
+        self.style.configure('h1.TLabel', background=self.bg_color, foreground=self.fg_color, font=('Raleway', 32),
+                             padding=30, relief='flat')
+        self.style.configure('h2.TLabel', background=self.bg_color, foreground=self.fg_color, font=('Raleway', 24),
                              padding=30, relief='flat')
         self.style.configure('p.TLabel', background=self.bg_color, foreground=self.text_color, font=(self.font, 14),
                              relief='flat')
@@ -62,6 +68,10 @@ class Modern:
                              relief='flat')
 
         self.style.configure('TButton', background='#333333', foreground=self.fg_color, font=('font', 14), padding='15 10',
+                             relief='flat')
+
+        self.style.configure('button-large.TButton', background='#333333', foreground=self.fg_color, font=('font', 24),
+                             padding='25 20',
                              relief='flat')
 
         return self.style
