@@ -1,24 +1,50 @@
 import logging
 import random
 import socket
-import sys
 import threading
 import tkinter
-
 import select
-from tkinter import simpledialog, messagebox
+from tkinter import simpledialog, messagebox, filedialog
 from tkinter import *
 from tkinter import ttk
 from time import sleep
+import json
+import os
+import io
+import keyboard
 from themes import Modern
+from themes import EntryXL
+
+
+def create_packet(data, message=''):
+    """Merges an unserialized dict and string to convert into json"""
+    if data is None:
+        data = {'id': id(data)}
+        return json.dumps(data).encode()
+
+    if message != '':
+        data['message'] = message
+    return json.dumps(data).encode()
+
+
+def parse_packet(packet):
+    """Takes a serialized packet and returns a dictionary if it is a packet"""
+    data = packet.decode()
+    if len(data) > 0 and data[0] == '{' and data[len(data) - 1] == '}':
+        props = json.loads(data)
+        return props
+    else:
+        # Not json format
+        return data
 
 
 class Server:
     room_name = ''
     active_conns = []
-    connections = {None: {'name': 'ryan', 'color': '#000000'}}
+    conns_data = []
 
     def __init__(self, host, port):
+        self.room_name = ''
         self.host = host
         self.port = port
 
@@ -26,7 +52,7 @@ class Server:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind((self.host, self.port))
             sock.listen()
-            sock.setblocking(FALSE)
+            sock.setblocking(0)
 
             read_socket_list = [sock]
             write_socket_list = [sock]
@@ -34,14 +60,15 @@ class Server:
             while True:
                 receivable, writeable, err = select.select(read_socket_list, write_socket_list, [], 1)
 
+                # Thread safe Event signal to close
                 if end_signal.is_set():
                     logging.warning("[SIGEND] Server closing head")
                     return SIGEND
 
+                # Waiting for new connections
                 for r in receivable:
                     if r == sock:
                         conn, addr = sock.accept()
-                        print(conn)
                         self.active_conns.append(conn)
 
                         print(f"[Server] Connected: {conn}")
@@ -49,21 +76,27 @@ class Server:
                         conn_thread.start()
 
     def listen(self, conn):
-        conn.sendall(f"Welcome to PyChat! (name:{self.room_name} | users:{len(self.active_conns)})".encode())
-        conn.setblocking(TRUE)
-        initialized = FALSE
+        server_packet = create_packet(None)
+        conn.sendall(server_packet)
 
+        conn.setblocking(1)
+        initialized = False
+
+        sleep(0.5)
         while True:
             data = conn.recv(1024)
+            packet = parse_packet(data)
 
-            if (not initialized) and int(data.decode()[0]) == int(SIGCONFIG):
-                initialized = TRUE
-                unpacked_data = f"{data.decode()[1:]}".split(',')
-                self.connections[conn] = {'name': unpacked_data[0], 'color': unpacked_data[1]}
-                print(f"[SIGCONFIG] Connection: {self.connections[conn]}")
+            if not initialized and packet:
+                initialized = True
+                conn.sendall(f"Welcome to PyChat! (name:{self.room_name} | users:{len(self.active_conns)})".encode())
+
+                # packet_dump = json.dumps(packet)
+                # self.conns_data.append(packet_dump)
+                # self.__save_clients()
 
                 for c in self.active_conns:
-                    c.sendall(f"[Server] [{self.connections[conn]['name']}] joined!".encode())
+                    c.sendall(f"{parse_packet(server_packet)['id']} joined!".encode())
                 continue
 
             if not data:
@@ -78,22 +111,27 @@ class Server:
                 continue
 
             for c in self.active_conns:
-                c.sendall(f"[{self.connections[conn]['name']}] ".encode() + data)
+                c.sendall(create_packet(packet, message=packet['message']))
+
+    def __save_clients(self):
+        with tkinter.filedialog.asksaveasfile() as file:
+            file.writelines(f"{self.conns_data}\n")
 
 
 class Client:
     class Config:
-        name = ''
+        def __init__(self):
+            self.cid = -1
+            self.name = 'n/a'
+            self.color = self.get_random_color()
+            self.properties = {'id': -1, 'name': self.name, 'color': self.color}
 
-        def __init__(self, name='default', color='#default'):
-            self.name = name
-            if color == "#default":
-                self.randomize_color()
-            else:
-                self.color = color
+        @staticmethod
+        def get_random_color():
+            return f'#{hex(random.randint(50, 255))[2:]}{hex(random.randint(50, 255))[2:]}{hex(random.randint(50, 255))[2:]}'.upper()
 
-        def randomize_color(self):
-            self.color = f'#{hex(random.randint(50, 255))[2:]}{hex(random.randint(50, 255))[2:]}{hex(random.randint(50, 255))[2:]}'.upper()
+        def update(self):
+            self.properties = {'id': self.cid, 'name': self.name, 'color': self.color}
 
     def __init__(self, host_addr='127.0.0.1', port_num=8080, config=None):
         self.host_addr = host_addr
@@ -101,12 +139,13 @@ class Client:
         self.config = self.Config()
 
     def launch(self, name):
-        print(name)
         self.config.name = name
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.connect((self.host_addr, self.port_num))
-            sock.sendall(SIGCONFIG + self.config.name.encode() + b"," + self.config.color.encode())
+
+            self.config.update()
+            sock.sendall(create_packet(self.config.properties))
 
             sock.setblocking(FALSE)
 
@@ -128,20 +167,44 @@ class Client:
 
                         if not data:
                             break
+                        print(data)
 
-                        sender = data.decode()[1:].split(']')[0]
+                        # Send Data
+                        if isinstance(parse_packet(data), dict):
+                            # If packet is from self
+                            packet = parse_packet(data)
+                            if self.config.cid == -1:
+                                self.config.cid = packet['id']
+                                continue
 
-                        if sender == self.config.name:
-                            ui.chat_output.tag_config('client_color', foreground=self.config.color)
-                            ui.chat_output.insert('end', data.decode() + "\n", 'client_color', )
+                            if packet['name'] == self.config.name:
+                                if self.config.cid == -1:
+                                    self.config.cid = packet['id']
+                                gui.chat_output.tag_config('self', foreground=packet['color'],
+                                                           font=('TkDefaultFont', 14, 'bold'))
+                                gui.chat_output.insert('end', f"[{packet['name']}] " + f"{packet['message']}\n", 'self')
+                            else:
+                                gui.chat_output.tag_config(packet['id'], foreground=packet['color'])
+                                gui.chat_output.insert('end', f"[{packet['name']}] " + f"{packet['message']}\n",
+                                                       packet['id'])
+                            continue
                         else:
-                            ui.chat_output.insert('end', data.decode() + "\n")
+                            # If packet is from server
+                            gui.chat_output.insert('end', "[Server] " + data.decode() + "\n")
+                            continue
 
                 for w in writeable:
+                    if keyboard.is_pressed('escape'):
+                        gui.root.focus_force()
+                        continue
+                    if keyboard.is_pressed('enter') and gui.chat_input.get_valid_input():
+                        update_buffer(gui.chat_input.get_valid_input())
+
                     if w == sock:
-                        if ui.buffered_input != "":
-                            sock.sendall(ui.buffered_input.encode())
-                            ui.buffered_input = ""
+                        if gui.buffered_input != "":
+                            self.config.update()
+                            sock.sendall(create_packet(self.config.properties, message=gui.buffered_input))
+                            gui.buffered_input = ""
 
 
 host = '127.0.0.1'
@@ -156,16 +219,22 @@ server = Server(host, port)
 client = Client(host, port)
 
 server_thread = threading.Thread(target=server.launch)
-client_thread = threading.Thread(target=client.launch, args=(client.config.name,))
+client_thread = threading.Thread(target=client.launch)
 end_signal = threading.Event()
 
 
 def start_host(name):
     global client_thread
+
+    addr = tkinter.simpledialog.askstring("Room Address", "Enter a room address (blank for localhost)")
+    if addr != '':
+        client.host_addr = addr
+
+    client.config.name = "Ryan"
     client_thread = threading.Thread(target=client.launch, args=(name,))
 
     server.room_name = tkinter.simpledialog.askstring("Room Name", "Enter a room name:")
-    ui.open_content()
+    gui.open_page(gui.pages['main'])
 
     server_thread.start()
 
@@ -174,11 +243,15 @@ def start_host(name):
     client_thread.start()
 
 
-def start_join(name):
+def start_join(name, addr):
     global client_thread
+    addr = tkinter.simpledialog.askstring("Room Address", "Enter a room address (blank for localhost)")
+    if addr != '':
+        server.host = client.host_addr = addr
+
     client_thread = threading.Thread(target=client.launch, args=(name,))
 
-    ui.open_content()
+    gui.open_page(gui.pages['main'])
 
     client_thread.start()
 
@@ -204,100 +277,166 @@ def on_quit(root):
 
 
 def update_buffer(msg):
-    ui.buffered_input = msg
-    ui.name = ""
-    ui.chat_input.delete(0, len(ui.buffered_input))
-    print(f"Buffer updated: {ui.buffered_input}")
+    if msg != "":
+        gui.buffered_input = msg
+        gui.name = ""
+        gui.chat_input.delete(0, len(gui.buffered_input))
+        print(f"Buffer updated: {gui.buffered_input}")
 
 
-class UI:
+class PySocketWindow:
+    theme = None
+
     buffered_input = ""
     name_input = ""
     chat_input = ""
     chat_output = ""
 
+    class Page(ttk.Frame):
+        def __init__(self, master=None, theme=None, **kw):
+            super().__init__(master)
+            self.root = master
+            self.theme = theme
+
+    class Menu(Page):
+        def __init__(self, master=None, theme=None, **kw):
+            super().__init__(master, theme=theme)
+
+        def create(self):
+            theme = self.theme
+
+            header = ttk.Label(self, text="PySocket")
+            header.configure(style=theme.elements['h1'])
+
+            name_entry = ttk.Frame(self, padding='20 10')
+            name_entry.configure(style=theme.elements['entry'])
+            name_input = EntryXL(name_entry, placeholder='name...', font=(theme.font, 16))
+
+            name_input.configure(style=theme.elements['input'])
+            name_input.insert('end', 'name...')
+
+            host_button = ttk.Button(self, text="Host",
+                                     command=lambda: start_host(name_input.get_valid_input()))
+            host_button.configure(style=theme.elements['button-large'])
+
+            join_button = ttk.Button(self, text="Join",
+                                     command=lambda: start_join(name_input.get_valid_input()))
+            join_button.configure(style=theme.elements['button-large'])
+
+            self.grid()
+            header.grid(column=0, row=0, pady='0 40')
+            name_entry.grid(column=0, row=1, pady='0 80')
+            name_input.grid(column=0, row=1)
+            host_button.grid(column=0, row=2, pady='0 30')
+            join_button.grid(column=0, row=3)
+            self.grid_remove()
+
+    class Host(Page):
+        def __init__(self, master=None, theme=None, **kw):
+            super().__init__(master, theme=theme)
+
+        def create(self):
+            theme = self.theme
+            self.configure(style=theme.elements['body'])
+
+            header = ttk.Label(self, text="PySocket")
+            header.configure(style=theme.elements['h1'])
+
+            chat_entry = ttk.Frame(self, width=50, padding=20)
+            chat_entry.configure(style=theme.elements['entry'])
+            chat_input = EntryXL(chat_entry, placeholder='type here...', background='#aaaaaa',
+                                           font=(theme.font, 16))
+            chat_input.configure(style=theme.elements['input'])
+
+            send_button = ttk.Button(self, text="send",
+                                     command=lambda: update_buffer(chat_input.get_valid_input()),
+                                     takefocus=False)
+            send_button.configure(style=theme.elements['button'])
+
+            chat_output = Text(self, background=theme.mg_color, foreground=theme.fg_color,
+                                         font=(theme.font, 16),
+                                         relief='flat', width=40, height=15, padx=18, pady=22)
+            chat_output.bind('<FocusIn>', lambda event: self.root.chat_output.config(state='disabled'))
+            chat_output.bind('<FocusOut>', lambda event: self.root.chat_output.config(state='normal'))
+
+            self.grid()
+            header.grid(column=0, row=0, sticky='n')
+            chat_output.grid(column=0, row=1, sticky='nswe')
+            chat_entry.grid(column=0, row=2, sticky='nswe')
+            chat_input.grid(column=0, row=2, sticky='nswe')
+            send_button.grid(column=0, row=2, sticky='nse')
+            self.grid_remove()
+
+    class Main(Page):
+        def create(self):
+            theme = self.theme
+            self.configure(style=theme.elements['body'])
+
+            header = ttk.Label(self, text="PySocket")
+            header.configure(style=theme.elements['h1'])
+
+            chat_entry = ttk.Frame(self, width=50, padding=20)
+            chat_entry.configure(style=theme.elements['entry'])
+            chat_input = EntryXL(chat_entry, placeholder='type here...', background='#aaaaaa',
+                                           font=(theme.font, 16))
+            chat_input.configure(style=theme.elements['input'])
+
+            send_button = ttk.Button(self, text="send",
+                                     command=lambda: update_buffer(chat_input.get_valid_input()),
+                                     takefocus=False)
+            send_button.configure(style=theme.elements['button'])
+
+            chat_output = Text(self, background=theme.mg_color, foreground=theme.fg_color,
+                                         font=(theme.font, 16),
+                                         relief='flat', width=40, height=15, padx=18, pady=22)
+            chat_output.bind('<FocusIn>', lambda event: self.root.chat_output.config(state='disabled'))
+            chat_output.bind('<FocusOut>', lambda event: self.root.chat_output.config(state='normal'))
+
+            self.grid()
+            header.grid(column=0, row=0, sticky='n')
+            chat_output.grid(column=0, row=1, sticky='nswe')
+            chat_entry.grid(column=0, row=2, sticky='nswe')
+            chat_input.grid(column=0, row=2, sticky='nswe')
+            send_button.grid(column=0, row=2, sticky='nse')
+            self.grid_remove()
+
     def __init__(self, root_name='', menu=''):
+        self.pages = {None: None}
         self.root_name = root_name
         self.root = Tk('modern')
-        self.menu = ttk.Frame(self.root)
-        self.content = ttk.Frame(self.root)
 
-    def create(self):
-        # region Window Setup
-        root = self.root
-        menu = self.menu
-        content = self.content
-
-        root.geometry("1280x720")
-        theme = Modern(root)
-        root.configure(background=theme.bg_color)
+        self.root.geometry("1280x720")
+        theme = Modern(self.root)
+        self.root.configure(background=theme.bg_color)
 
         style = theme.get_style()
         style.theme_use(theme.get_name())
-        # endregion
 
-        # region Menu Setup (Page 1)
-        menu.configure(style=theme.elements['body'])
+        self.pages.clear()
+        self.pages['menu'] = self.Menu(self.root, theme=theme)
+        self.pages['main'] = self.Main(self.root, theme=theme)
 
-        header = ttk.Label(menu, text="PySocket")
-        header.configure(style=theme.elements['h1'])
+        self.pages['menu'].create()
+        self.pages['main'].create()
 
-        name_entry = ttk.Frame(menu, width=50, padding=20)
-        name_entry.configure(style=theme.elements['entry'])
-        self.name_input = ttk.Entry(name_entry, background='#aaaaaa', font=(theme.font, 16))
-        self.name_input.configure(style=theme.elements['input'])
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
 
-        host_button = ttk.Button(menu, text="Host", command=lambda: start_host(self.name_input.get()))
-        host_button.configure(style=theme.elements['button-large'])
+        self.initialize()
 
-        join_button = ttk.Button(menu, text="Join", command=lambda: start_join(self.name_input.get()))
-        join_button.configure(style=theme.elements['button-large'])
+    def initialize(self):
+        self.open_page(page=self.pages['menu'])
+        self.root.protocol('WM_DELETE_WINDOW', lambda: on_quit(self.root))
+        self.root.mainloop()
 
-        menu.grid()
-        root.columnconfigure(menu, weight=1)
-        root.rowconfigure(menu, weight=1)
-        menu.grid(column=0, row=0)
-        header.grid(column=0, row=0, pady='0 20')
-        name_entry.grid(column=0, row=1, sticky='nswe', pady='0 80')
-        self.name_input.grid(column=0, row=1, sticky='nswe')
-        host_button.grid(column=0, row=2, pady='0 30')
-        join_button.grid(column=0, row=3, pady='0 30')
-        # endregion
+    def open_page(self, page):
+        for p in self.pages.values():
+            p.grid_remove()
 
-        # region Content Setup (Page 2)
-        content.configure(style=theme.elements['body'])
+        page.grid()
 
-        header = ttk.Label(content, text="PySocket")
-        header.configure(style=theme.elements['h1'])
-
-        chat_entry = ttk.Frame(content, width=50, padding=20)
-        chat_entry.configure(style=theme.elements['entry'])
-        self.chat_input = ttk.Entry(chat_entry, background='#aaaaaa', font=(theme.font, 16))
-        self.chat_input.configure(style=theme.elements['input'])
-
-        send_button = ttk.Button(content, text="send", command=lambda: update_buffer(self.chat_input.get()))
-        send_button.configure(style=theme.elements['button'])
-
-        self.chat_output = Text(content, background=theme.mg_color, foreground=theme.fg_color, font=(theme.font, 16),
-                                relief='flat', width=40, height=15, padx=18, pady=22)
-
-        header.grid(column=0, row=0, sticky='n')
-        self.chat_output.grid(column=0, row=1, sticky='nswe')
-        chat_entry.grid(column=0, row=2, sticky='nswe')
-        self.chat_input.grid(column=0, row=2, sticky='nswe')
-        send_button.grid(column=0, row=2, sticky='nse')
-        # endregion
-
-        root.protocol('WM_DELETE_WINDOW', lambda: on_quit(root))
-        root.mainloop()
-
-    def open_content(self):
-        self.menu.grid_forget()
-        self.content.grid()
-
-        self.root.columnconfigure(self.content, weight=1)
-        self.root.rowconfigure(self.content, weight=1)
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
 
 
-ui = UI('PyChat')
-ui.create()
+gui = PySocketWindow('PyChat')
