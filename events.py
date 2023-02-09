@@ -5,22 +5,18 @@ logging.basicConfig(level=logging.INFO)
 
 
 class Events(Enum):
-    OPEN_CHAT = 0
-    SERVER_SEND = 1
-    CLIENT_SEND = 2
+    START_CHAT = 0
+    SEND_CHAT = 1
+    RECEIVE_CHAT = 2
     QUIT = 3
 
 
 events = dict()
 
-
-def register(evt: Events, target=None, context=None, args=None, kwargs=None):
-    if kwargs is None:
-        kwargs = dict()
-    if args is None:
-        args = [()]
+def register(evt: Events, target=None, context=None):
     evt_id = id(target)
-    events[(evt, evt_id)] = (target, (args, kwargs))
+    print(target)
+    events[(evt, evt_id)] = target
 
     logging.info(f"Registered Event: {evt} {f' from {context}' if context is not None else ''}")
 
@@ -32,6 +28,9 @@ def deregister(evt: Events, target=None):
     logging.info(f"Deregistered Event: {evt}")
 
 
-def broadcast(evt: Events):
+def broadcast(evt: Events, *args, **kwargs):
+    logging.info(f"Broadcasting Event: {evt}")
+
     for v in events.values():
-        v[0](*v[1][0], **v[1][1])
+        v[0](args, kwargs)
+
