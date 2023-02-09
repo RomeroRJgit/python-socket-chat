@@ -8,7 +8,7 @@ class EntryXL(ttk.Entry):
     text_color = '#454142'
 
     def __init__(self, master=None, widget=None, placeholder='', **kw):
-        super().__init__(master)
+        super().__init__(master, widget)
         self.placeholder = placeholder if placeholder != '' else ''
         self.valid_input = self.get()
         self.bind('<Visibility>', self.show_placeholder)

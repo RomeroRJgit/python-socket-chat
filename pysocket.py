@@ -13,6 +13,7 @@ import os
 import io
 import keyboard
 from themes import Modern
+import events
 from themes import EntryXL
 
 
@@ -52,7 +53,7 @@ class Server:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind((self.host, self.port))
             sock.listen()
-            sock.setblocking(0)
+            sock.setblocking(False)
 
             read_socket_list = [sock]
             write_socket_list = [sock]
@@ -118,6 +119,14 @@ class Server:
             file.writelines(f"{self.conns_data}\n")
 
 
+class Input:
+    def __init__(self):
+        self.submit = False
+
+    def poll(self):
+        self.submit = keyboard.is_pressed(self.submit)
+
+
 class Client:
     class Config:
         def __init__(self):
@@ -180,31 +189,34 @@ class Client:
                             if packet['name'] == self.config.name:
                                 if self.config.cid == -1:
                                     self.config.cid = packet['id']
-                                gui.chat_output.tag_config('self', foreground=packet['color'],
-                                                           font=('TkDefaultFont', 14, 'bold'))
-                                gui.chat_output.insert('end', f"[{packet['name']}] " + f"{packet['message']}\n", 'self')
+                                # gui.chat_output.tag_config('self', foreground=packet['color'],
+                                # font=('TkDefaultFont', 14, 'bold'))
+                                # gui.chat_output.insert('end', f"[{packet['name']}] " + f"{packet['message']}\n", 'self')
                             else:
-                                gui.chat_output.tag_config(packet['id'], foreground=packet['color'])
-                                gui.chat_output.insert('end', f"[{packet['name']}] " + f"{packet['message']}\n",
-                                                       packet['id'])
+                                pass
+                                # gui.chat_output.tag_config(packet['id'], foreground=packet['color'])
+                                # gui.chat_output.insert('end', f"[{packet['name']}] " + f"{packet['message']}\n",
+                                # packet['id'])
                             continue
                         else:
                             # If packet is from server
-                            gui.chat_output.insert('end', "[Server] " + data.decode() + "\n")
+                            # gui.chat_output.insert('end', "[Server] " + data.decode() + "\n")
+                            events.broadcast(events.Events.RECEIVE_CHAT, "hello")
                             continue
 
                 for w in writeable:
                     if keyboard.is_pressed('escape'):
-                        gui.root.focus_force()
+                        # gui.root.focus_force()
                         continue
-                    if keyboard.is_pressed('enter') and gui.chat_input.get_valid_input():
-                        update_buffer(gui.chat_input.get_valid_input())
+                    if keyboard.is_pressed('enter'):
+                        events.broadcast(events.Events.SEND_CHAT, "hi")
+                        # update_buffer(gui.chat_input.get_valid_input())
 
-                    if w == sock:
-                        if gui.buffered_input != "":
-                            self.config.update()
-                            sock.sendall(create_packet(self.config.properties, message=gui.buffered_input))
-                            gui.buffered_input = ""
+                    # if w == sock:
+                    # if gui.buffered_input != "":
+                    # self.config.update()
+                    # sock.sendall(create_packet(self.config.properties, message=gui.buffered_input))
+                    # gui.buffered_input = ""
 
 
 host = '127.0.0.1'
@@ -234,7 +246,7 @@ def start_host(name):
     client_thread = threading.Thread(target=client.launch, args=(name,))
 
     server.room_name = tkinter.simpledialog.askstring("Room Name", "Enter a room name:")
-    gui.open_page(gui.pages['main'])
+    events.broadcast(events.Events.START_CHAT)
 
     server_thread.start()
 
@@ -250,8 +262,7 @@ def start_join(name, addr):
         server.host = client.host_addr = addr
 
     client_thread = threading.Thread(target=client.launch, args=(name,))
-
-    gui.open_page(gui.pages['main'])
+    events.broadcast(events.Events.START_CHAT)
 
     client_thread.start()
 
@@ -275,22 +286,24 @@ def on_quit(root):
                 logging.warning('Server thread joined')
         root.destroy()
 
+class Chat:
+    def __init__(self):
+        self.chat_input = ""
+        self.chat_output = ""
 
-def update_buffer(msg):
-    if msg != "":
-        gui.buffered_input = msg
-        gui.name = ""
-        gui.chat_input.delete(0, len(gui.buffered_input))
-        print(f"Buffer updated: {gui.buffered_input}")
+        events.register(events.Events.SEND_CHAT, target=self.set_input)
+
+    def set_input(self, msg):
+        self.chat_input = msg
+
+    def set_output(self, msg):
+        self.set_output = msg
+        print(msg)
+        #gui.pages['menu'].chat_output = self.set_output
 
 
 class PySocketWindow:
     theme = None
-
-    buffered_input = ""
-    name_input = ""
-    chat_input = ""
-    chat_output = ""
 
     class Page(ttk.Frame):
         def __init__(self, master=None, theme=None, **kw):
@@ -310,10 +323,9 @@ class PySocketWindow:
 
             name_entry = ttk.Frame(self, padding='20 10')
             name_entry.configure(style=theme.elements['entry'])
-            name_input = EntryXL(name_entry, placeholder='name...', font=(theme.font, 16))
+            name_input = EntryXL(name_entry, placeholder='named...', font=(theme.font, 16))
 
             name_input.configure(style=theme.elements['input'])
-            name_input.insert('end', 'name...')
 
             host_button = ttk.Button(self, text="Host",
                                      command=lambda: start_host(name_input.get_valid_input()))
@@ -345,18 +357,18 @@ class PySocketWindow:
             chat_entry = ttk.Frame(self, width=50, padding=20)
             chat_entry.configure(style=theme.elements['entry'])
             chat_input = EntryXL(chat_entry, placeholder='type here...', background='#aaaaaa',
-                                           font=(theme.font, 16))
+                                 font=(theme.font, 16))
             chat_input.configure(style=theme.elements['input'])
 
             send_button = ttk.Button(self, text="send",
-                                     command=lambda: update_buffer(chat_input.get_valid_input()),
                                      takefocus=False)
             send_button.configure(style=theme.elements['button'])
 
             chat_output = Text(self, background=theme.mg_color, foreground=theme.fg_color,
-                                         font=(theme.font, 16),
-                                         relief='flat', width=40, height=15, padx=18, pady=22)
+                               font=(theme.font, 16),
+                               relief='flat', width=40, height=15, padx=18, pady=22)
             chat_output.bind('<FocusIn>', lambda event: self.root.chat_output.config(state='disabled'))
+            self.root.focus_force()
             chat_output.bind('<FocusOut>', lambda event: self.root.chat_output.config(state='normal'))
 
             self.grid()
@@ -368,6 +380,27 @@ class PySocketWindow:
             self.grid_remove()
 
     class Main(Page):
+
+        def __init__(self, master=None, theme=None, **kw):
+            super().__init__(master, theme=theme)
+            self.chat_output = ""
+            self.input_buffer = ""
+            events.register(events.Events.RECEIVE_CHAT, target=self.update_chat)
+            threading.Thread()
+
+        def update_buffer(msg):
+            if msg != "":
+                # gui.buffered_input = msg
+                # gui.name = ""
+                # gui.chat_input.delete(0, len(gui.buffered_input))
+                # print(f"Buffer updated: {gui.buffered_input}")
+                print(f"Sent: {msg}")
+
+        def update_chat(self, msg):
+            print(msg)
+            chat.chat_input = msg
+            self.chat_output.insert(0, msg)
+
         def create(self):
             theme = self.theme
             self.configure(style=theme.elements['body'])
@@ -377,26 +410,29 @@ class PySocketWindow:
 
             chat_entry = ttk.Frame(self, width=50, padding=20)
             chat_entry.configure(style=theme.elements['entry'])
-            chat_input = EntryXL(chat_entry, placeholder='type here...', background='#aaaaaa',
-                                           font=(theme.font, 16))
-            chat_input.configure(style=theme.elements['input'])
+            self.chat_input = EntryXL(chat_entry, placeholder='type here...',
+                                 background='#aaaaaa',
+                                 font=(theme.font, 16))
+            self.chat_input.configure(style=theme.elements['input'])
 
             send_button = ttk.Button(self, text="send",
-                                     command=lambda: update_buffer(chat_input.get_valid_input()),
+                                     command=lambda: events.broadcast(events.Events.SEND_CHAT, chat.chat_input),
                                      takefocus=False)
             send_button.configure(style=theme.elements['button'])
 
-            chat_output = Text(self, background=theme.mg_color, foreground=theme.fg_color,
-                                         font=(theme.font, 16),
-                                         relief='flat', width=40, height=15, padx=18, pady=22)
-            chat_output.bind('<FocusIn>', lambda event: self.root.chat_output.config(state='disabled'))
-            chat_output.bind('<FocusOut>', lambda event: self.root.chat_output.config(state='normal'))
+            self.chat_output = Text(self, background=theme.mg_color, foreground=theme.fg_color,
+                                    font=(theme.font, 16),
+                                    relief='flat', width=40, height=15, padx=18, pady=22)
+            self.chat_output.bind('<Button-1>', lambda: chat.set_input(self.chat_input.get()))
+
+            self.chat_output.bind('<FocusIn>', lambda event: self.root.chat_output.config(state='disabled'))
+            self.chat_output.bind('<FocusOut>', lambda event: self.root.chat_output.config(state='normal'))
 
             self.grid()
             header.grid(column=0, row=0, sticky='n')
-            chat_output.grid(column=0, row=1, sticky='nswe')
+            self.chat_output.grid(column=0, row=1, sticky='nswe')
             chat_entry.grid(column=0, row=2, sticky='nswe')
-            chat_input.grid(column=0, row=2, sticky='nswe')
+            self.chat_input.grid(column=0, row=2, sticky='nswe')
             send_button.grid(column=0, row=2, sticky='nse')
             self.grid_remove()
 
@@ -422,6 +458,8 @@ class PySocketWindow:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
 
+        events.register(events.Events.START_CHAT, target=lambda: self.open_page(page=self.pages['main']))
+
         self.initialize()
 
     def initialize(self):
@@ -439,4 +477,6 @@ class PySocketWindow:
         self.root.rowconfigure(0, weight=1)
 
 
+client_input = Input()
+chat = Chat()
 gui = PySocketWindow('PyChat')
