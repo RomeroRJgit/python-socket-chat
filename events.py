@@ -13,6 +13,7 @@ class Events(Enum):
 
 events = dict()
 
+
 def register(evt: Events, target=None, context=None):
     evt_id = id(target)
     print(target)
@@ -31,6 +32,7 @@ def deregister(evt: Events, target=None):
 def broadcast(evt: Events, *args, **kwargs):
     logging.info(f"Broadcasting Event: {evt}")
 
-    for v in events.values():
-        v[0](args, kwargs)
+    for k, v in events.items():
+        if k[0] == evt:
+            v(*args, **kwargs)
 
